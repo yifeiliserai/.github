@@ -1,0 +1,13 @@
+Dockerfile
+.dockerignore
+.git
+bin
+.vscode
+.idea
+.gradle
+.gitlab-ci.yml
+.classpath
+.settings
+.project
+.gitignore
+**/node_modules

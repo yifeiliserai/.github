@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "app-service.fullname" . }}
+  labels:
+    {{- include "app-service.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  strategy: 
+    type: {{ .Values.strategy.type | default "RollingUpdate" | quote }}
+  selector:
+    matchLabels:
+      {{- include "app-service.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+      {{- if .Values.cloudSQLProxy.enabled }}      
+        proxy.istio.io/config: '{ "holdApplicationUntilProxyStarts": true }'
+      {{- end }}      
+      {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}    
+      {{- end }}
+      labels:
+        {{- include "app-service.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "app-service.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ include "app-service.fullname" . }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env: 
+            {{- if .Values.storageBucket.enabled }}
+            - name: GCP_STORAGE_BUCKET_NAME
+              value: {{ include "app-service.bucketName" . }}}
+            {{- end }}
+
+            {{- if .Values.cloudSQLProxy.enabled }}
+            - name: SPRING_DATASOURCE_URL
+              value: "jdbc:postgresql://127.0.0.1:5432/{{ (split "-" (include "app-service.fullname" .))._0 }}?ssl=true&sslmode=disable"
+            - name: SPRING_DATASOURCE_USERNAME
+              value: {{ include "app-service.gsaDBName" . }}
+            {{- end }}
+          ports:
+            - name: {{ printf "http-%s-pod-port" (include "app-service.fullname" .) | trunc 15 | trimSuffix "-" }}
+              containerPort: {{ .Values.containers.ports.containerPort }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: {{ tpl .Values.containers.probePath . }}
+              port: {{ .Values.containers.ports.containerPort }}
+              httpHeaders:
+              - name: X-B3-Sampled
+                value: "0"
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: {{ tpl .Values.containers.probePath . }}
+              port: {{ .Values.containers.ports.containerPort }}
+              httpHeaders:
+              - name: X-B3-Sampled
+                value: "0"
+            periodSeconds: 10
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: {{ tpl .Values.containers.probePath . }}
+              port: {{ .Values.containers.ports.containerPort }}
+              httpHeaders:
+              - name: X-B3-Sampled
+                value: "0"
+            periodSeconds: 5
+            failureThreshold: 20
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+        {{- if .Values.cloudSQLProxy.enabled }}
+        - name: cloud-sql-proxy
+          # It is recommended to use the latest version of the Cloud SQL proxy
+          # Make sure to update on a regular schedule!
+          image: asia.gcr.io/cloudsql-docker/gce-proxy:1.22.0
+          command:
+            - "/cloud_sql_proxy"
+
+            # If connecting from a VPC-native GKE cluster, you can use the
+            # following flag to have the proxy connect over private IP
+            - "-ip_address_types=PRIVATE"
+            - "-enable_iam_login"
+            - "-verbose=true"
+            - "-log_debug_stdout=true"
+
+            # Replace DB_PORT with the port the proxy should listen on
+            # Defaults: MySQL: 3306, Postgres: 5432, SQLServer: 1433
+            - "-instances={{ include "app-service.dbInstanceName" . }}=tcp:5432"
+          securityContext:
+            # The default Cloud SQL proxy image runs as the
+            # "nonroot" user and group (uid: 65532) by default.
+            runAsNonRoot: true
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
